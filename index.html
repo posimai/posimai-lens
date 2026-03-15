@@ -184,6 +184,8 @@
         .btn-primary:hover { opacity: .88; }
         .btn-ghost { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
         .btn-ghost:hover { color: var(--text); background: var(--surface); }
+        .form-input { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; color:var(--text); font-family:inherit; font-size:13px; transition:border-color .15s; }
+        .form-input:focus { border-color:var(--accent); outline:none; }
 
         /* Toast */
         #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 16px; font-size: 13px; font-weight: 500; z-index: 9999; box-shadow: var(--shadow-lg); transition: opacity .2s, transform .2s; opacity: 0; pointer-events: none; white-space: nowrap; }
@@ -317,6 +319,14 @@
                         <button class="lang-btn" data-lang-val="ja" aria-pressed="true">日本語</button>
                         <button class="lang-btn" data-lang-val="en" aria-pressed="false">English</button>
                     </div>
+                </div>
+            </div>
+            <div class="settings-group">
+                <div class="settings-group-label">同期</div>
+                <div class="settings-item" style="flex-direction:column;align-items:flex-start;gap:6px">
+                    <div class="settings-item-label">API キー</div>
+                    <input class="form-input" id="apiKeyInput" type="password" placeholder="Bearer トークンを入力" autocomplete="off" style="font-size:12px">
+                    <button class="btn btn-ghost" id="saveApiKeyBtn" style="font-size:12px;padding:6px 10px;align-self:flex-end">保存</button>
                 </div>
             </div>
         </div>
@@ -466,7 +476,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
 const settingsPanel = document.getElementById('settingsPanel');
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsCloseBtn = document.getElementById('settingsCloseBtn');
-function openSettings() { settingsPanel.classList.add('open'); settingsBtn.setAttribute('aria-expanded', 'true'); }
+function openSettings() { settingsPanel.classList.add('open'); settingsBtn.setAttribute('aria-expanded', 'true'); document.getElementById('apiKeyInput').value = _apiKey; }
 function closeSettings() { settingsPanel.classList.remove('open'); settingsBtn.setAttribute('aria-expanded', 'false'); }
 function toggleSettings() { settingsPanel.classList.contains('open') ? closeSettings() : openSettings(); }
 settingsBtn.addEventListener('click', toggleSettings);
@@ -486,35 +496,78 @@ function showToast(msg) {
     _toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
 }
 
-// ── History (localStorage) ────────────────────────────
-const HISTORY_KEY = 'posimai-lens-history';
-function loadHistoryData() {
-    try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch { return []; }
+// ── API ───────────────────────────────────────────────
+const API_BASE = 'https://posimai-lab.tail72e846.ts.net/brain/api';
+let _apiKey = localStorage.getItem('posimai-lens-apikey') || '';
+let _historyCache = []; // local cache of API history
+
+async function api(method, path, body) {
+    if (!_apiKey) throw new Error('APIキー未設定');
+    const r = await fetch(API_BASE + path, {
+        method,
+        headers: { 'Authorization': 'Bearer ' + _apiKey, 'Content-Type': 'application/json' },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
 }
-function saveHistoryEntry(entry) {
-    const arr = loadHistoryData();
-    arr.unshift(entry);
-    if (arr.length > 20) arr.length = 20;
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(arr));
-    document.getElementById('historyCount').textContent = arr.length;
+
+document.getElementById('saveApiKeyBtn').addEventListener('click', () => {
+    const val = document.getElementById('apiKeyInput').value.trim();
+    _apiKey = val;
+    localStorage.setItem('posimai-lens-apikey', val);
+    closeSettings();
+    showToast('APIキーを保存しました');
+    loadHistory();
+});
+
+async function loadHistory() {
+    if (!_apiKey) return;
+    try {
+        const { history } = await api('GET', '/lens/history?limit=20');
+        _historyCache = history;
+        document.getElementById('historyCount').textContent = history.length;
+        renderHistory();
+    } catch (e) {
+        // Silent fail for history load
+    }
 }
+
+async function saveHistoryEntry(filename, exif_data, thumb) {
+    if (!_apiKey) return;
+    try {
+        const { id, scanned_at } = await api('POST', '/lens/history', { filename, exif_data, thumbnail: thumb });
+        const camera = [exif_data.Make, exif_data.Model].filter(Boolean).join(' ') || null;
+        const dateStr = exif_data.DateTimeOriginal || null;
+        _historyCache.unshift({ id, filename, exif_data, camera, date: dateStr, thumbnail: thumb, scanned_at });
+        if (_historyCache.length > 20) _historyCache.length = 20;
+        document.getElementById('historyCount').textContent = _historyCache.length;
+    } catch (e) {
+        // Silent fail
+    }
+}
+
 function renderHistory() {
-    const arr = loadHistoryData();
+    const arr = _historyCache;
     const el = document.getElementById('historyList');
     if (!arr.length) {
         el.innerHTML = '<div class="empty"><i data-lucide="clock" style="width:36px;height:36px;stroke-width:1;color:var(--border)"></i><div class="empty-title">履歴がありません</div><p style="font-size:12px;color:var(--text3)">写真を分析すると履歴が保存されます</p></div>';
         lucide.createIcons();
         return;
     }
-    el.innerHTML = arr.map(h => `
+    el.innerHTML = arr.map(h => {
+        const thumb = h.thumbnail;
+        const camera = (h.exif_data && h.exif_data._camera) || h.camera || '不明なカメラ';
+        const date = (h.exif_data && h.exif_data._date) || h.date || (h.scanned_at ? new Date(h.scanned_at).toLocaleDateString('ja-JP') : '日時不明');
+        return `
         <div class="history-item">
-            ${h.thumb ? `<img class="history-thumb" src="${h.thumb}" alt="">` : `<div class="history-thumb-placeholder"><i data-lucide="image" style="width:18px;height:18px;stroke-width:1"></i></div>`}
+            ${thumb ? `<img class="history-thumb" src="${thumb}" alt="">` : `<div class="history-thumb-placeholder"><i data-lucide="image" style="width:18px;height:18px;stroke-width:1"></i></div>`}
             <div class="history-info">
-                <div class="history-name">${escHtml(h.name)}</div>
-                <div class="history-meta">${h.camera || '不明なカメラ'} &middot; ${h.date || '日時不明'}</div>
+                <div class="history-name">${escHtml(h.filename || '')}</div>
+                <div class="history-meta">${escHtml(camera)} &middot; ${escHtml(date)}</div>
             </div>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
     lucide.createIcons();
 }
 
@@ -607,8 +660,16 @@ async function analyzeFile(file) {
         thumb = canvas.toDataURL('image/jpeg', 0.5);
     } catch { /* no thumb */ }
 
+    // Serialize exif for storage (convert Date objects)
+    const exifForStorage = {};
+    for (const [k, v] of Object.entries(exif)) {
+        exifForStorage[k] = v instanceof Date ? v.toISOString() : v;
+    }
+    // Store camera summary fields for easy display
+    if (camera) exifForStorage._camera = camera;
     const dateStr = exif.DateTimeOriginal instanceof Date ? exif.DateTimeOriginal.toLocaleDateString('ja-JP') : null;
-    saveHistoryEntry({ name: file.name, camera: camera || null, date: dateStr || new Date().toLocaleDateString('ja-JP'), thumb });
+    if (dateStr) exifForStorage._date = dateStr;
+    await saveHistoryEntry(file.name, exifForStorage, thumb);
 
     dropSection.style.display = 'none';
     resultSection.style.display = 'block';
@@ -648,9 +709,8 @@ document.getElementById('copyExifBtn').addEventListener('click', () => {
 // ── Init ─────────────────────────────────────────────
 applyTheme(_themePref);
 applyLocale(_locale);
-const initCount = loadHistoryData().length;
-if (initCount > 0) document.getElementById('historyCount').textContent = initCount;
 lucide.createIcons();
+loadHistory();
 
 // SW
 if ('serviceWorker' in navigator) {
