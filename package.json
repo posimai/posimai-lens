@@ -1,0 +1,7 @@
+{
+  "name": "posimai-lens",
+  "version": "1.0.0",
+  "scripts": {
+    "deploy": "git push gitea main && git push github main"
+  }
+}

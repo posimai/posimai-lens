@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="robots" content="noindex, nofollow">
+
+    <!-- FOUC 防止 -->
+    <script>
+    (function () {
+        var t = localStorage.getItem('posimai-lens-theme') || 'system';
+        var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme:dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme-pref', t);
+        var loc = localStorage.getItem('posimai-lens-locale');
+        if (!loc) loc = navigator.language && navigator.language.startsWith('en') ? 'en' : 'ja';
+        document.documentElement.lang = loc;
+        document.documentElement.setAttribute('data-locale', loc);
+    })();
+    </script>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="description" content="写真のEXIFメタデータを即座に読み取る">
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" content="#0D0D0D" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#F9FAFB" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Posimai Lens">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" href="/logo.png">
+    <link rel="apple-touch-icon" href="/logo.png">
+    <title>Posimai Lens</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <!-- exifr: lightweight EXIF parser -->
+    <script src="https://cdn.jsdelivr.net/npm/exifr@7/dist/lite.umd.cjs"></script>
+
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root, [data-theme="dark"] {
+            --bg:         #0D0D0D;
+            --surface:    #1A1A1A;
+            --surface2:   #252525;
+            --border:     #2D2D2D;
+            --text:       #F3F4F6;
+            --text2:      #9CA3AF;
+            --text3:      #6B7280;
+            --accent:     #6EE7B7;
+            --accent-dim: rgba(110,231,183,0.1);
+            --accent-border: rgba(110,231,183,0.25);
+            --header-bg:  rgba(13,13,13,0.85);
+            --sidebar-bg: rgba(13,13,13,0.88);
+            --overlay-bg: rgba(0,0,0,0.6);
+            --shadow-lg:  0 8px 32px rgba(0,0,0,0.5);
+            --shadow-sm:  0 2px 8px rgba(0,0,0,0.3);
+            color-scheme: dark;
+        }
+        [data-theme="light"] {
+            --bg:         #F9FAFB;
+            --surface:    #FFFFFF;
+            --surface2:   #F3F4F6;
+            --border:     #E5E7EB;
+            --text:       #111827;
+            --text2:      #4B5563;
+            --text3:      #9CA3AF;
+            --accent:     #059669;
+            --accent-dim: rgba(5,150,105,0.08);
+            --accent-border: rgba(5,150,105,0.2);
+            --header-bg:  rgba(249,250,251,0.85);
+            --sidebar-bg: rgba(249,250,251,0.92);
+            --overlay-bg: rgba(0,0,0,0.4);
+            --shadow-lg:  0 8px 32px rgba(0,0,0,0.15);
+            --shadow-sm:  0 2px 8px rgba(0,0,0,0.08);
+            color-scheme: light;
+        }
+        :root {
+            --radius: 12px; --radius-sm: 8px;
+            --header-h: 52px; --sidebar-w: 240px;
+            --ease: cubic-bezier(.4,0,.2,1); --dur: 0.2s;
+        }
+
+        body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+        .app { display: flex; min-height: 100dvh; }
+
+        :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+        :focus:not(:focus-visible) { outline: none; }
+
+        /* Sidebar */
+        .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: var(--sidebar-w); background: var(--sidebar-bg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 200; transform: translateX(-100%); transition: transform .25s var(--ease); }
+        .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-lg); }
+        .sidebar-header { height: var(--header-h); display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; flex-shrink: 0; }
+        .brand { display: flex; align-items: center; gap: 10px; }
+        .brand-logo { width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #6EE7B7, #047857); }
+        [data-theme="light"] .brand-logo { background: linear-gradient(135deg, #34D399, #059669); }
+        .brand-text { display: flex; flex-direction: column; }
+        .brand-name { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
+        .brand-org { font-size: 10px; font-weight: 500; color: var(--text3); text-transform: uppercase; letter-spacing: 0.1em; }
+        .sidebar-nav { flex: 1; overflow-y: auto; padding: 4px 8px 0; }
+        .sidebar-nav::-webkit-scrollbar { width: 0; }
+        .nav-section-label { font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.1em; padding: 12px 10px 4px; }
+        .nav-item { display: flex; align-items: center; gap: 9px; padding: 9px 10px; min-height: 40px; border-radius: var(--radius-sm); border: 1px solid transparent; cursor: pointer; color: var(--text2); font-size: 13px; font-weight: 500; transition: background var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease); text-decoration: none; user-select: none; }
+        .nav-item:hover { background: var(--surface2); color: var(--text); }
+        .nav-item.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-border); }
+        .nav-item svg { flex-shrink: 0; opacity: .8; }
+        .nav-item.active svg { opacity: 1; }
+        .nav-item-label { flex: 1; }
+        .nav-count { font-size: 11px; font-weight: 600; color: var(--text3); background: var(--surface2); border-radius: 999px; padding: 1px 6px; min-width: 20px; text-align: center; line-height: 1.6; }
+        .nav-item.active .nav-count { background: var(--accent-dim); color: var(--accent); }
+        .sidebar-footer { flex-shrink: 0; padding: 8px; border-top: 1px solid var(--border); }
+        .user-row { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; transition: background var(--dur); }
+        .user-row:hover { background: var(--surface2); }
+        .user-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-dim); border: 1px solid var(--accent-border); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--accent); flex-shrink: 0; }
+        .user-info { flex: 1; min-width: 0; }
+        .user-name { font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .user-role { font-size: 11px; color: var(--text3); }
+        .settings-trigger { background: none; border: none; cursor: pointer; color: var(--text3); display: flex; align-items: center; padding: 6px; border-radius: var(--radius-sm); transition: color var(--dur), background var(--dur); flex-shrink: 0; }
+        .settings-trigger:hover { color: var(--text2); background: var(--surface2); }
+
+        /* Settings panel */
+        .settings-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 280px; background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; z-index: 300; transform: translateX(100%); transition: transform .25s var(--ease); }
+        .settings-panel.open { transform: translateX(0); box-shadow: var(--shadow-lg); }
+        .settings-panel-header { height: var(--header-h); display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; flex-shrink: 0; border-bottom: 1px solid var(--border); }
+        .settings-panel-title { font-size: 14px; font-weight: 600; }
+        .settings-panel-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 24px; }
+        .settings-group { display: flex; flex-direction: column; }
+        .settings-group-label { font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
+        .settings-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+        .settings-item:last-child { border-bottom: none; }
+        .settings-item-label { font-size: 13px; color: var(--text); }
+        .theme-selector { display: flex; gap: 4px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 3px; }
+        .theme-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 8px; border-radius: 6px; border: none; cursor: pointer; font-family: inherit; font-size: 11px; font-weight: 500; color: var(--text3); background: none; transition: all var(--dur) var(--ease); white-space: nowrap; }
+        .theme-btn:hover { color: var(--text2); }
+        .theme-btn.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+        .lang-selector { display: flex; gap: 4px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 3px; }
+        .lang-btn { flex: 1; padding: 7px; border-radius: 6px; border: none; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600; color: var(--text3); background: none; transition: all var(--dur) var(--ease); text-align: center; }
+        .lang-btn:hover { color: var(--text2); }
+        .lang-btn.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+
+        /* Overlay */
+        .overlay { display: none; position: fixed; inset: 0; background: var(--overlay-bg); backdrop-filter: blur(2px); z-index: 150; }
+        .overlay.open { display: block; }
+
+        /* Main */
+        .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+        .header { height: var(--header-h); display: flex; align-items: center; gap: 8px; padding: 0 16px; background: var(--header-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
+        .page-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; flex: 1; }
+        .mobile-brand { display: flex; align-items: center; gap: 7px; flex: 1; }
+        .mobile-brand-dot { width: 7px; height: 7px; background: var(--accent); border-radius: 50%; }
+        .mobile-brand-name { font-size: 14px; font-weight: 600; }
+        .icon-btn { background: none; border: none; cursor: pointer; color: var(--text2); min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); transition: color var(--dur), background var(--dur); flex-shrink: 0; margin: 0 -8px; }
+        .icon-btn:hover { color: var(--text); background: var(--surface2); }
+        .content { flex: 1; padding: 24px 20px calc(40px + env(safe-area-inset-bottom)); max-width: 960px; width: 100%; margin: 0 auto; }
+
+        @media (min-width: 1024px) {
+            .sidebar { transform: translateX(0) !important; box-shadow: none !important; }
+            .main { margin-left: var(--sidebar-w); }
+            .mobile-brand { display: none; }
+            .page-title { display: block; }
+            #menuBtn { display: none; }
+            .overlay { display: none !important; }
+            body.sidebar-collapsed .sidebar { transform: translateX(-100%) !important; }
+            body.sidebar-collapsed .main { margin-left: 0; }
+            body.sidebar-collapsed #menuBtn { display: flex !important; }
+            body.sidebar-collapsed .mobile-brand { display: flex !important; }
+            body.sidebar-collapsed .page-title { display: none; }
+        }
+        @media (max-width: 1023px) {
+            .page-title { display: none; }
+            .mobile-brand { display: flex; }
+        }
+
+        /* Components */
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+        .section { margin-top: 28px; }
+        .section:first-child { margin-top: 0; }
+        .section-label { font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: var(--radius-sm); border: none; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 500; transition: all var(--dur) var(--ease); }
+        .btn-primary { background: var(--accent); color: #0D0D0D; }
+        .btn-primary:hover { opacity: .88; }
+        .btn-ghost { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+        .btn-ghost:hover { color: var(--text); background: var(--surface); }
+
+        /* Toast */
+        #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 16px; font-size: 13px; font-weight: 500; z-index: 9999; box-shadow: var(--shadow-lg); transition: opacity .2s, transform .2s; opacity: 0; pointer-events: none; white-space: nowrap; }
+        #toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+
+        /* ── Lens specific ── */
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 48px 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color .2s, background .2s;
+            position: relative;
+        }
+        .drop-zone:hover, .drop-zone.drag-over {
+            border-color: var(--accent);
+            background: var(--accent-dim);
+        }
+        .drop-zone input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+        .drop-icon { color: var(--text3); margin-bottom: 12px; }
+        .drop-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+        .drop-sub { font-size: 12px; color: var(--text3); }
+
+        .preview-wrap {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 20px;
+            align-items: start;
+        }
+        @media (max-width: 640px) { .preview-wrap { grid-template-columns: 1fr; } }
+        .preview-img { width: 200px; height: 200px; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--border); display: block; }
+        .preview-img-placeholder { width: 200px; height: 200px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2); display: flex; align-items: center; justify-content: center; color: var(--text3); }
+
+        .exif-table { width: 100%; border-collapse: collapse; }
+        .exif-table tr { border-bottom: 1px solid var(--border); }
+        .exif-table tr:last-child { border-bottom: none; }
+        .exif-table td { padding: 8px 4px; font-size: 13px; vertical-align: top; }
+        .exif-table td:first-child { color: var(--text3); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; width: 120px; padding-top: 10px; }
+        .exif-table td:last-child { color: var(--text); font-weight: 500; word-break: break-word; }
+        .exif-val-mono { font-family: 'SF Mono', 'Consolas', monospace; font-size: 12px; }
+        .exif-link { color: var(--accent); text-decoration: none; }
+        .exif-link:hover { text-decoration: underline; }
+
+        .history-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
+        .history-item:last-child { border-bottom: none; }
+        .history-thumb { width: 44px; height: 44px; border-radius: 8px; background: var(--surface2); border: 1px solid var(--border); object-fit: cover; display: block; flex-shrink: 0; }
+        .history-thumb-placeholder { width: 44px; height: 44px; border-radius: 8px; background: var(--surface2); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--text3); flex-shrink: 0; }
+        .history-info { flex: 1; min-width: 0; }
+        .history-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .history-meta { font-size: 11px; color: var(--text3); margin-top: 1px; }
+        .empty { text-align: center; padding: 48px 24px; color: var(--text3); }
+        .empty-title { font-size: 15px; font-weight: 600; color: var(--text2); margin: 12px 0 4px; }
+    </style>
+</head>
+<body>
+<a href="#main-content" class="skip-link" tabindex="0">コンテンツへスキップ</a>
+<div class="app">
+    <!-- Sidebar -->
+    <nav class="sidebar" id="sidebar" role="navigation" aria-label="サイドバー">
+        <div class="sidebar-header">
+            <div class="brand">
+                <div class="brand-logo" aria-hidden="true">
+                    <i data-lucide="aperture" style="width:16px;height:16px;color:#0D0D0D;stroke-width:2"></i>
+                </div>
+                <div class="brand-text">
+                    <span class="brand-name">Posimai Lens</span>
+                    <span class="brand-org">Posimai</span>
+                </div>
+            </div>
+            <button class="icon-btn" id="closeBtn" aria-label="メニューを閉じる" aria-expanded="false">
+                <i data-lucide="x" style="width:18px;height:18px;stroke-width:1.75"></i>
+            </button>
+        </div>
+
+        <div class="sidebar-nav">
+            <div class="nav-section-label">メインメニュー</div>
+            <a class="nav-item active" data-view="drop" data-title-ja="読み取り" data-title-en="Read" href="#" role="menuitem">
+                <i data-lucide="image" style="width:16px;height:16px;stroke-width:1.75"></i>
+                <span class="nav-item-label">読み取り</span>
+            </a>
+            <a class="nav-item" data-view="history" data-title-ja="履歴" data-title-en="History" href="#" role="menuitem">
+                <i data-lucide="clock" style="width:16px;height:16px;stroke-width:1.75"></i>
+                <span class="nav-item-label">履歴</span>
+                <span class="nav-count" id="historyCount">0</span>
+            </a>
+        </div>
+
+        <div class="sidebar-footer">
+            <div class="user-row" role="button" tabindex="0" aria-label="設定を開く">
+                <div class="user-avatar" aria-hidden="true">P</div>
+                <div class="user-info">
+                    <div class="user-name">Posimai</div>
+                    <div class="user-role">Personal</div>
+                </div>
+                <button class="settings-trigger" id="settingsBtn" aria-label="設定" aria-expanded="false" aria-controls="settingsPanel">
+                    <i data-lucide="settings" style="width:16px;height:16px;stroke-width:1.5"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Settings panel -->
+    <aside class="settings-panel" id="settingsPanel" role="complementary" aria-label="設定パネル">
+        <div class="settings-panel-header">
+            <span class="settings-panel-title">設定</span>
+            <button class="icon-btn" id="settingsCloseBtn" aria-label="設定を閉じる">
+                <i data-lucide="x" style="width:18px;height:18px;stroke-width:1.75"></i>
+            </button>
+        </div>
+        <div class="settings-panel-body">
+            <div class="settings-group">
+                <div class="settings-group-label">外観</div>
+                <div class="settings-item">
+                    <div class="settings-item-label">テーマ</div>
+                    <div class="theme-selector" role="group" aria-label="テーマ選択">
+                        <button class="theme-btn" data-theme-val="dark" aria-pressed="false">
+                            <i data-lucide="moon" style="width:12px;height:12px;stroke-width:1.75"></i>ダーク
+                        </button>
+                        <button class="theme-btn" data-theme-val="light" aria-pressed="false">
+                            <i data-lucide="sun" style="width:12px;height:12px;stroke-width:1.75"></i>ライト
+                        </button>
+                        <button class="theme-btn" data-theme-val="system" aria-pressed="false">
+                            <i data-lucide="monitor" style="width:12px;height:12px;stroke-width:1.75"></i>自動
+                        </button>
+                    </div>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-item-label">言語 / Language</div>
+                    <div class="lang-selector" role="group" aria-label="言語選択">
+                        <button class="lang-btn" data-lang-val="ja" aria-pressed="true">日本語</button>
+                        <button class="lang-btn" data-lang-val="en" aria-pressed="false">English</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <div class="overlay" id="overlay" aria-hidden="true"></div>
+
+    <!-- Main -->
+    <div class="main">
+        <header class="header">
+            <button class="icon-btn" id="menuBtn" aria-label="メニューを開く" aria-expanded="false" aria-controls="sidebar">
+                <i data-lucide="menu" style="width:20px;height:20px;stroke-width:1.75"></i>
+            </button>
+            <div class="mobile-brand" aria-hidden="true">
+                <div class="mobile-brand-dot"></div>
+                <span class="mobile-brand-name">Lens</span>
+            </div>
+            <span class="page-title" id="pageTitle">読み取り</span>
+        </header>
+
+        <main class="content" id="main-content">
+
+            <!-- 読み取りビュー -->
+            <div id="view-drop">
+                <div id="dropSection">
+                    <div class="drop-zone" id="dropZone">
+                        <input type="file" id="fileInput" accept="image/*" multiple>
+                        <div class="drop-icon">
+                            <i data-lucide="image-up" style="width:40px;height:40px;stroke-width:1"></i>
+                        </div>
+                        <div class="drop-title">写真をドロップ または クリックして選択</div>
+                        <div class="drop-sub">JPEG / HEIC / RAW など EXIF 対応フォーマット</div>
+                    </div>
+                </div>
+
+                <div id="resultSection" style="display:none;margin-top:24px">
+                    <div class="section">
+                        <div class="section-label">EXIF データ</div>
+                        <div class="card">
+                            <div class="preview-wrap">
+                                <img class="preview-img" id="previewImg" src="" alt="プレビュー" style="display:none">
+                                <div class="preview-img-placeholder" id="previewPlaceholder">
+                                    <i data-lucide="image" style="width:24px;height:24px;stroke-width:1"></i>
+                                </div>
+                                <table class="exif-table" id="exifTable"></table>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-ghost" id="analyzeAnotherBtn">
+                            <i data-lucide="refresh-cw" style="width:14px;height:14px;stroke-width:1.75"></i>
+                            別の写真を分析
+                        </button>
+                        <button class="btn btn-ghost" id="copyExifBtn">
+                            <i data-lucide="copy" style="width:14px;height:14px;stroke-width:1.75"></i>
+                            コピー
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 履歴ビュー -->
+            <div id="view-history" hidden>
+                <div class="section-label">最近の分析</div>
+                <div class="card" id="historyList">
+                    <div class="empty">
+                        <i data-lucide="clock" style="width:36px;height:36px;stroke-width:1;color:var(--border)"></i>
+                        <div class="empty-title">履歴がありません</div>
+                        <p style="font-size:12px;color:var(--text3)">写真を分析すると履歴が保存されます</p>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+
+<script>
+// ── i18n ──────────────────────────────────────────────
+const STRINGS = {
+    ja: { 'nav.read': '読み取り', 'nav.history': '履歴', 'drop.title': '写真をドロップ または クリックして選択', 'drop.sub': 'JPEG / HEIC / RAW など EXIF 対応フォーマット', 'no.exif': 'EXIFデータが見つかりませんでした', 'copy.done': 'コピーしました', 'settings.title': '設定' },
+    en: { 'nav.read': 'Read', 'nav.history': 'History', 'drop.title': 'Drop photo or click to select', 'drop.sub': 'JPEG / HEIC / RAW and other EXIF-compatible formats', 'no.exif': 'No EXIF data found', 'copy.done': 'Copied', 'settings.title': 'Settings' }
+};
+let _locale = document.documentElement.getAttribute('data-locale') || 'ja';
+function t(k) { return (STRINGS[_locale] || STRINGS.ja)[k] || k; }
+function applyLocale(locale) {
+    _locale = locale;
+    document.documentElement.lang = locale;
+    document.documentElement.setAttribute('data-locale', locale);
+    localStorage.setItem('posimai-lens-locale', locale);
+    document.querySelectorAll('.lang-btn').forEach(b => {
+        const a = b.dataset.langVal === locale;
+        b.classList.toggle('active', a);
+        b.setAttribute('aria-pressed', String(a));
+    });
+}
+
+// ── Theme ─────────────────────────────────────────────
+let _themePref = document.documentElement.getAttribute('data-theme-pref') || 'system';
+const _mql = window.matchMedia('(prefers-color-scheme: dark)');
+function applyTheme(pref) {
+    _themePref = pref;
+    localStorage.setItem('posimai-lens-theme', pref);
+    document.documentElement.setAttribute('data-theme-pref', pref);
+    const dark = pref === 'dark' || (pref === 'system' && _mql.matches);
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    document.querySelectorAll('.theme-btn').forEach(b => {
+        const a = b.dataset.themeVal === pref;
+        b.classList.toggle('active', a);
+        b.setAttribute('aria-pressed', String(a));
+    });
+}
+_mql.addEventListener('change', () => { if (_themePref === 'system') applyTheme('system'); });
+
+// ── Sidebar ───────────────────────────────────────────
+const sidebar = document.getElementById('sidebar');
+const overlay = document.getElementById('overlay');
+const menuBtn = document.getElementById('menuBtn');
+const closeBtn = document.getElementById('closeBtn');
+const isDesktop = () => window.matchMedia('(min-width: 1024px)').matches;
+function openSidebar() { if (isDesktop()) { document.body.classList.remove('sidebar-collapsed'); } else { sidebar.classList.add('open'); overlay.classList.add('open'); } menuBtn.setAttribute('aria-expanded', 'true'); }
+function closeSidebar() { if (isDesktop()) { document.body.classList.add('sidebar-collapsed'); } else { sidebar.classList.remove('open'); overlay.classList.remove('open'); } menuBtn.setAttribute('aria-expanded', 'false'); }
+menuBtn.addEventListener('click', openSidebar);
+closeBtn.addEventListener('click', closeSidebar);
+overlay.addEventListener('click', () => { closeSidebar(); closeSettings(); });
+
+// ── Nav ───────────────────────────────────────────────
+document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', e => {
+        e.preventDefault();
+        document.querySelectorAll('.nav-item').forEach(n => { n.classList.remove('active'); n.removeAttribute('aria-current'); });
+        item.classList.add('active');
+        item.setAttribute('aria-current', 'page');
+        const title = _locale === 'en' ? item.dataset.titleEn : item.dataset.titleJa;
+        if (title) document.getElementById('pageTitle').textContent = title;
+        document.querySelectorAll('[id^="view-"]').forEach(v => v.hidden = true);
+        const el = document.getElementById('view-' + item.dataset.view);
+        if (el) el.hidden = false;
+        if (!isDesktop()) closeSidebar();
+        if (item.dataset.view === 'history') renderHistory();
+    });
+});
+
+// ── Settings ──────────────────────────────────────────
+const settingsPanel = document.getElementById('settingsPanel');
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsCloseBtn = document.getElementById('settingsCloseBtn');
+function openSettings() { settingsPanel.classList.add('open'); settingsBtn.setAttribute('aria-expanded', 'true'); }
+function closeSettings() { settingsPanel.classList.remove('open'); settingsBtn.setAttribute('aria-expanded', 'false'); }
+function toggleSettings() { settingsPanel.classList.contains('open') ? closeSettings() : openSettings(); }
+settingsBtn.addEventListener('click', toggleSettings);
+settingsCloseBtn.addEventListener('click', closeSettings);
+document.querySelector('.user-row').addEventListener('click', e => { if (!e.target.closest('button') || e.target.closest('#settingsBtn')) toggleSettings(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (settingsPanel.classList.contains('open')) closeSettings(); else if (!isDesktop() && sidebar.classList.contains('open')) closeSidebar(); } });
+document.querySelectorAll('.theme-btn').forEach(b => b.addEventListener('click', () => applyTheme(b.dataset.themeVal)));
+document.querySelectorAll('.lang-btn').forEach(b => b.addEventListener('click', () => applyLocale(b.dataset.langVal)));
+
+// ── Toast ─────────────────────────────────────────────
+const toast = document.getElementById('toast');
+let _toastTimer;
+function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
+}
+
+// ── History (localStorage) ────────────────────────────
+const HISTORY_KEY = 'posimai-lens-history';
+function loadHistoryData() {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch { return []; }
+}
+function saveHistoryEntry(entry) {
+    const arr = loadHistoryData();
+    arr.unshift(entry);
+    if (arr.length > 20) arr.length = 20;
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(arr));
+    document.getElementById('historyCount').textContent = arr.length;
+}
+function renderHistory() {
+    const arr = loadHistoryData();
+    const el = document.getElementById('historyList');
+    if (!arr.length) {
+        el.innerHTML = '<div class="empty"><i data-lucide="clock" style="width:36px;height:36px;stroke-width:1;color:var(--border)"></i><div class="empty-title">履歴がありません</div><p style="font-size:12px;color:var(--text3)">写真を分析すると履歴が保存されます</p></div>';
+        lucide.createIcons();
+        return;
+    }
+    el.innerHTML = arr.map(h => `
+        <div class="history-item">
+            ${h.thumb ? `<img class="history-thumb" src="${h.thumb}" alt="">` : `<div class="history-thumb-placeholder"><i data-lucide="image" style="width:18px;height:18px;stroke-width:1"></i></div>`}
+            <div class="history-info">
+                <div class="history-name">${escHtml(h.name)}</div>
+                <div class="history-meta">${h.camera || '不明なカメラ'} &middot; ${h.date || '日時不明'}</div>
+            </div>
+        </div>
+    `).join('');
+    lucide.createIcons();
+}
+
+// ── EXIF Reading ──────────────────────────────────────
+const dropZone   = document.getElementById('dropZone');
+const fileInput  = document.getElementById('fileInput');
+const resultSection = document.getElementById('resultSection');
+const dropSection   = document.getElementById('dropSection');
+const previewImg    = document.getElementById('previewImg');
+const previewPlaceholder = document.getElementById('previewPlaceholder');
+const exifTable  = document.getElementById('exifTable');
+
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function fmt(val) {
+    if (val === undefined || val === null) return '—';
+    if (val instanceof Date) return val.toLocaleString('ja-JP');
+    if (typeof val === 'number') return String(val);
+    return escHtml(String(val));
+}
+
+function fmtShutter(v) {
+    if (!v) return '—';
+    if (v < 1) return '1/' + Math.round(1/v) + 's';
+    return v + 's';
+}
+
+function fmtGPS(lat, lon) {
+    if (!lat || !lon) return null;
+    const latStr = lat.toFixed(6);
+    const lonStr = lon.toFixed(6);
+    const url = `https://maps.google.com/?q=${latStr},${lonStr}`;
+    return `<a class="exif-link" href="${url}" target="_blank" rel="noopener">${latStr}, ${lonStr}</a>`;
+}
+
+async function analyzeFile(file) {
+    // Show preview
+    const objUrl = URL.createObjectURL(file);
+    previewImg.src = objUrl;
+    previewImg.style.display = 'block';
+    previewPlaceholder.style.display = 'none';
+
+    // Read EXIF
+    let exif = {};
+    try {
+        exif = await exifr.parse(file, {
+            tiff: true, exif: true, gps: true, xmp: false, iptc: false,
+            pick: ['Make','Model','LensModel','DateTimeOriginal','ExposureTime','FNumber','ISO','FocalLength','ImageWidth','ImageHeight','GPSLatitude','GPSLongitude','Orientation']
+        }) || {};
+    } catch(e) { console.warn('exifr error', e); }
+
+    // Build table rows
+    const rows = [];
+
+    const camera = [exif.Make, exif.Model].filter(Boolean).join(' ');
+    if (camera) rows.push(['カメラ', escHtml(camera)]);
+    if (exif.LensModel) rows.push(['レンズ', escHtml(exif.LensModel)]);
+    if (exif.DateTimeOriginal) rows.push(['撮影日時', exif.DateTimeOriginal instanceof Date ? exif.DateTimeOriginal.toLocaleString('ja-JP') : escHtml(String(exif.DateTimeOriginal))]);
+    if (exif.FNumber) rows.push(['絞り', `<span class="exif-val-mono">f/${exif.FNumber}</span>`]);
+    if (exif.ExposureTime) rows.push(['シャッタースピード', `<span class="exif-val-mono">${fmtShutter(exif.ExposureTime)}</span>`]);
+    if (exif.ISO) rows.push(['ISO', `<span class="exif-val-mono">ISO ${exif.ISO}</span>`]);
+    if (exif.FocalLength) rows.push(['焦点距離', `<span class="exif-val-mono">${exif.FocalLength}mm</span>`]);
+    if (exif.ImageWidth && exif.ImageHeight) rows.push(['解像度', `<span class="exif-val-mono">${exif.ImageWidth} × ${exif.ImageHeight} px</span>`]);
+
+    const gpsHtml = fmtGPS(exif.latitude || exif.GPSLatitude, exif.longitude || exif.GPSLongitude);
+    if (gpsHtml) rows.push(['GPS', gpsHtml]);
+
+    rows.push(['ファイル名', escHtml(file.name)]);
+    rows.push(['サイズ', `<span class="exif-val-mono">${(file.size / 1024).toFixed(1)} KB</span>`]);
+
+    if (rows.length === 2) {
+        exifTable.innerHTML = `<tr><td colspan="2" style="color:var(--text3);padding:16px 0;text-align:center">EXIFデータが見つかりませんでした</td></tr>`;
+    } else {
+        exifTable.innerHTML = rows.map(([k,v]) => `<tr><td>${escHtml(k)}</td><td>${v}</td></tr>`).join('');
+    }
+
+    // Save to history
+    // Create small thumbnail
+    let thumb = null;
+    try {
+        const canvas = document.createElement('canvas');
+        const img = new Image();
+        await new Promise(res => { img.onload = res; img.src = objUrl; });
+        const s = 88;
+        canvas.width = s; canvas.height = s;
+        const ctx = canvas.getContext('2d');
+        const scale = Math.max(s/img.width, s/img.height);
+        const w = img.width * scale, h = img.height * scale;
+        ctx.drawImage(img, (s-w)/2, (s-h)/2, w, h);
+        thumb = canvas.toDataURL('image/jpeg', 0.5);
+    } catch { /* no thumb */ }
+
+    const dateStr = exif.DateTimeOriginal instanceof Date ? exif.DateTimeOriginal.toLocaleDateString('ja-JP') : null;
+    saveHistoryEntry({ name: file.name, camera: camera || null, date: dateStr || new Date().toLocaleDateString('ja-JP'), thumb });
+
+    dropSection.style.display = 'none';
+    resultSection.style.display = 'block';
+    lucide.createIcons();
+}
+
+// Drop zone
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/') || /\.(heic|heif|cr2|cr3|nef|arw|dng|orf|rw2)$/i.test(f.name));
+    if (files.length) analyzeFile(files[0]);
+});
+fileInput.addEventListener('change', () => {
+    if (fileInput.files.length) analyzeFile(fileInput.files[0]);
+    fileInput.value = '';
+});
+
+// Buttons
+document.getElementById('analyzeAnotherBtn').addEventListener('click', () => {
+    dropSection.style.display = 'block';
+    resultSection.style.display = 'none';
+    previewImg.style.display = 'none';
+    previewPlaceholder.style.display = 'flex';
+});
+document.getElementById('copyExifBtn').addEventListener('click', () => {
+    const rows = [...exifTable.querySelectorAll('tr')];
+    const text = rows.map(r => {
+        const cells = r.querySelectorAll('td');
+        return cells.length >= 2 ? cells[0].textContent + ': ' + cells[1].textContent : '';
+    }).filter(Boolean).join('\n');
+    navigator.clipboard.writeText(text).then(() => showToast('コピーしました'));
+});
+
+// ── Init ─────────────────────────────────────────────
+applyTheme(_themePref);
+applyLocale(_locale);
+const initCount = loadHistoryData().length;
+if (initCount > 0) document.getElementById('historyCount').textContent = initCount;
+lucide.createIcons();
+
+// SW
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
