@@ -1,4 +1,4 @@
-const CACHE = 'posimai-lens-v1';
+const CACHE = 'posimai-lens-v2';
 const STATIC = ['/', '/index.html', '/manifest.json', '/logo.png'];
 
 self.addEventListener('install', e => {
