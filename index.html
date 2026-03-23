@@ -594,12 +594,15 @@ function fmtShutter(v) {
     return v + 's';
 }
 
-function fmtGPS(lat, lon) {
+function fmtGPS(lat, lon, label) {
     if (!lat || !lon) return null;
     const latStr = lat.toFixed(6);
     const lonStr = lon.toFixed(6);
-    const url = `https://maps.google.com/?q=${latStr},${lonStr}`;
-    return `<a class="exif-link" href="${url}" target="_blank" rel="noopener">${latStr}, ${lonStr}</a>`;
+    const googleUrl = `https://maps.google.com/?q=${latStr},${lonStr}`;
+    const mapsUrl = `https://posimai-maps.vercel.app?lat=${latStr}&lng=${lonStr}&label=${encodeURIComponent(label || '')}`;
+    return `<a class="exif-link" href="${googleUrl}" target="_blank" rel="noopener">${latStr}, ${lonStr}</a>` +
+           `<br><a class="exif-link" href="${mapsUrl}" target="_blank" rel="noopener" style="font-size:11px;margin-top:4px;display:inline-flex;align-items:center;gap:3px">` +
+           `<i data-lucide="map-pin" style="width:11px;height:11px;stroke-width:2"></i>Posimai Maps で開く</a>`;
 }
 
 async function analyzeFile(file) {
@@ -631,7 +634,7 @@ async function analyzeFile(file) {
     if (exif.FocalLength) rows.push(['焦点距離', `<span class="exif-val-mono">${exif.FocalLength}mm</span>`]);
     if (exif.ImageWidth && exif.ImageHeight) rows.push(['解像度', `<span class="exif-val-mono">${exif.ImageWidth} × ${exif.ImageHeight} px</span>`]);
 
-    const gpsHtml = fmtGPS(exif.latitude || exif.GPSLatitude, exif.longitude || exif.GPSLongitude);
+    const gpsHtml = fmtGPS(exif.latitude || exif.GPSLatitude, exif.longitude || exif.GPSLongitude, file.name);
     if (gpsHtml) rows.push(['GPS', gpsHtml]);
 
     rows.push(['ファイル名', escHtml(file.name)]);
